@@ -1,0 +1,8 @@
+[
+  "user_click_count",
+  "category_match",
+  "cat_affinity",
+  "article_popularity",
+  "emb_score",
+  "emb_max_sim"
+]

@@ -58,18 +58,29 @@ class LightGBMReranker:
             'learning_rate': 0.05,
             'num_leaves': 31,
             'min_data_in_leaf': 20,
+            'feature_fraction': 0.9,
+            'bagging_fraction': 0.9,
+            'bagging_freq': 1,
             'verbose': -1,
             'random_state': 42
         }
 
+        callbacks = []
+        if df_val is not None:
+            callbacks = [
+                lgb.early_stopping(stopping_rounds=50, verbose=False),
+                lgb.log_evaluation(period=50),
+            ]
+
         self.model = lgb.train(
             params,
             train_data,
-            num_boost_round=100,
+            num_boost_round=500,
             valid_sets=valid_sets,
             valid_names=valid_names,
-            callbacks=[lgb.early_stopping(stopping_rounds=10)] if df_val is not None else []
+            callbacks=callbacks,
         )
+        logger.info(f"Best iteration: {self.model.best_iteration} / 500")
         logger.info("Training completed.")
         return self
 

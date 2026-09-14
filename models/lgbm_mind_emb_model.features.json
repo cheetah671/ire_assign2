@@ -1,0 +1,12 @@
+[
+  "user_click_count",
+  "user_hist_recency_sum",
+  "session_clicks_1h",
+  "session_clicks_24h",
+  "category_match",
+  "cat_affinity",
+  "freshness_days",
+  "article_popularity",
+  "emb_score",
+  "emb_max_sim"
+]

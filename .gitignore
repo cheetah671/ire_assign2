@@ -3,6 +3,11 @@ data/
 *.pt
 *.ckpt
 *.npy
+*.npz
 __pycache__/
 *.pyc
 .env
+
+# Generated Codabench prediction files (hundreds of MB) - A2 Q8: no large files in git
+submissions/
+prediction.txt

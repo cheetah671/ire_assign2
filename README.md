@@ -14,6 +14,91 @@ The assignment is split into these parts:
 - Q8: commit work regularly
 - Q9: add a leakage test to verify time-based correctness
 
+## Assignment 2: Learning from Click-Logs
+
+A2 adds behavioural signals on top of the A1 retrieval stage: a two-stage
+retrieve-then-rank pipeline with a LightGBM re-ranker, an ablation with paired
+bootstrap CIs, and a serving/scale analysis.
+
+### Reproduce (in this order)
+
+```bash
+pip install -r requirements.txt
+
+# 1. Build the feature store from raw files (A1)
+python build_pipeline.py
+
+# 2. Stage-1 retrieval baselines (A1)
+python run_bm25.py       --dataset both
+python run_embeddings.py --dataset both
+
+# 3. Stage-2 re-ranker + ablation (A2 Q1-Q3)
+#    Scores stage-1 on train AND val, then trains three models:
+#      baseline  - behavioural features only
+#      improved  - + stage-1 semantic score   (the ablation contrast)
+#      serving   - improved minus features unavailable at serving time (Q9)
+#    Also writes stage1_val_predictions.parquet = the "before re-ranking" run.
+python run_reranker.py --dataset mind   --ranker emb
+python run_reranker.py --dataset ebnerd --ranker emb
+
+# 3b. Reproduced NRMS baseline (A2 Q3.1)
+python run_nrms.py --dataset mind   --epochs 2
+python run_nrms.py --dataset ebnerd --epochs 2
+
+# 3c. Is position bias real in these datasets? (A2 Q1.2)
+python scripts/analyse_position_bias.py
+
+# 4. Extended evaluation with bootstrap + paired bootstrap CIs (A2 Q5)
+python run_evaluation.py --dataset both --ranker all
+
+# 5. Serving and scale analysis (A2 Q4)
+python run_serving_analysis.py
+
+# 6. Leakage / behaviour-window tests (A2 Q9)
+pytest tests/ -v
+
+# 7. Codabench submission for MIND-large test
+python src/scripts/run_reranker_inference.py --dataset mind_large
+```
+
+### Two-stage design
+
+Stage 1 retrieves and scores candidates (BM25 or sentence-transformer
+embeddings). Stage 2 is a LightGBM `lambdarank` model over behavioural features
+**plus** the stage-1 score.
+
+The stage-1 score is computed on the training impressions with the same code
+path used for validation and inference. This matters: an earlier version filled
+the training column with a constant `0.0` placeholder, which gave it zero
+variance, so LightGBM never split on it and the feature was silently inert.
+`run_reranker.py` now asserts the training variance is non-zero and aborts if not.
+
+### Position bias: tested, then deliberately not used
+
+Q1.2 lists position bias as a session feature. Pooling all impressions makes it
+look strong — click rate falls monotonically with position. That is an artifact
+of mixing candidate-list lengths: a longer list has a lower per-candidate click
+rate by construction, and only long lists reach deep positions.
+
+Holding list length fixed, click rate is flat (mean position/CTR correlation
++0.03 on MIND, -0.04 on EB-NeRD). Both datasets shuffle the in-view list, so
+position carries no display-order information and a position feature would be
+noise. `scripts/analyse_position_bias.py` reproduces the check and writes
+`results/position_bias_check.csv`.
+
+### Features available at serving time
+
+MIND's test `behaviors.tsv` has no per-click timestamps and `news.tsv` has no
+publication date, so `user_hist_recency_sum`, `session_clicks_1h` and
+`freshness_days` cannot be reconstructed at serving time. They are listed in
+`SERVING_UNSAFE` in `run_reranker.py`, kept in the `improved` model for the Q9
+"with vs. without" comparison, and dropped from the `serving` model that
+actually produces the Codabench submission.
+
+Each model is saved next to a `.features.json` listing the exact feature order
+it was trained with; the inference script loads that file and refuses to run if
+it disagrees with the model's own feature names.
+
 ## What an Impression Means
 
 An impression is one recommendation event: a user sees a candidate set of articles at a specific time, and the dataset records which article(s) were clicked. In practice, each impression contains:

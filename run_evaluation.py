@@ -236,7 +236,9 @@ def main() -> None:
         help="Which dataset to evaluate.",
     )
     parser.add_argument(
-        "--ranker", choices=["bm25", "emb", "baseline", "improved", "both", "all"], default="bm25",
+        "--ranker",
+        choices=["bm25", "emb", "stage1", "baseline", "improved", "serving", "both", "all"],
+        default="bm25",
         help="Which ranker's predictions to evaluate.",
     )
     parser.add_argument(
@@ -259,10 +261,12 @@ def main() -> None:
     ranker_map = {
         "bm25": ["bm25"],
         "emb":  ["emb"],
+        "stage1": ["stage1"],
         "baseline": ["baseline"],
         "improved": ["improved"],
+        "serving": ["serving"],
         "both": ["bm25", "emb"],
-        "all": ["bm25", "emb", "baseline", "improved"]
+        "all": ["stage1", "baseline", "improved", "serving"],
     }
     rankers = ranker_map[args.ranker]
 
@@ -299,39 +303,66 @@ def main() -> None:
         results_df.to_csv(out_path, index=False)
         logger.info(f"\nFull results saved → {out_path}")
 
-    # ── Paired Bootstrap (Improved vs Baseline) ─────────────────────────
-    if "baseline" in rankers and "improved" in rankers and not args.no_bootstrap:
+    # ── Paired bootstrap (Q3.4) ──────────────────────────────────────────
+    # Each contrast isolates one claim. They share the same sampled impressions,
+    # which is what makes the pairing valid.
+    CONTRASTS = [
+        # (reference, variant, what the comparison establishes)
+        ("baseline", "improved",
+         "adding the stage-1 semantic score beats behavioural features alone"),
+        ("stage1", "improved",
+         "the two-stage reranker beats stage-1 retrieval on its own"),
+        ("improved", "serving",
+         "Q9: dropping features unavailable at serving time costs nothing"),
+    ]
+
+    if not args.no_bootstrap:
+        ci_rows = []
         for name in targets:
-            base_path = PRED_DIR / name / "baseline_val_predictions.parquet"
-            imp_path = PRED_DIR / name / "improved_val_predictions.parquet"
-            if base_path.exists() and imp_path.exists():
+            for ref, var, claim in CONTRASTS:
+                ref_path = PRED_DIR / name / f"{ref}_val_predictions.parquet"
+                var_path = PRED_DIR / name / f"{var}_val_predictions.parquet"
+                if not (ref_path.exists() and var_path.exists()):
+                    continue
+
                 logger.info("\n" + "=" * 80)
-                logger.info(f"PAIRED BOOTSTRAP SIGNIFICANCE (Improved vs Baseline) [{name}]")
+                logger.info(f"PAIRED BOOTSTRAP  [{name}]  {var} - {ref}")
+                logger.info(f"  claim: {claim}")
                 logger.info("=" * 80)
-                preds_baseline = pd.read_parquet(base_path)
-                preds_improved = pd.read_parquet(imp_path)
-                
-                # Standardize column names so a single metric_fn works
-                preds_baseline["score"] = preds_baseline["baseline_score"]
-                preds_baseline["rank"] = preds_baseline["baseline_rank"]
-                preds_improved["score"] = preds_improved["improved_score"]
-                preds_improved["rank"] = preds_improved["improved_rank"]
-                
+
+                preds_ref = pd.read_parquet(ref_path)
+                preds_var = pd.read_parquet(var_path)
+
+                preds_ref["score"] = preds_ref[f"{ref}_score"]
+                preds_ref["rank"]  = preds_ref[f"{ref}_rank"]
+                preds_var["score"] = preds_var[f"{var}_score"]
+                preds_var["rank"]  = preds_var[f"{var}_rank"]
+
                 def _generic_metrics(df):
                     return compute_ranking_metrics(
-                        df, score_col="score", rank_col="rank", 
+                        df, score_col="score", rank_col="rank",
                         impression_col=COL_IMPRESSION_ID, label_col=COL_LABEL
                     )
-                
+
                 ci = paired_bootstrap_ci(
-                    preds_baseline, preds_improved, _generic_metrics,
+                    preds_ref, preds_var, _generic_metrics,
                     n_iterations=args.bootstrap_n, seed=42
                 )
-                
-                logger.info("\n  ── 95% Confidence Intervals for (Improved - Baseline) ──")
+
+                logger.info(f"\n  95% CI for ({var} - {ref}):")
                 for k, (lo, hi) in ci.items():
-                    sig = "*** SIGNIFICANT ***" if (lo > 0 or hi < 0) else "Not significant"
-                    logger.info(f"    Delta {k:<8}: [{lo:+.4f} , {hi:+.4f}]  {sig}")
+                    sig = "SIGNIFICANT" if (lo > 0 or hi < 0) else "not significant"
+                    logger.info(f"    delta {k:<8}: [{lo:+.4f} , {hi:+.4f}]  {sig}")
+                    ci_rows.append({
+                        "dataset": name, "reference": ref, "variant": var,
+                        "metric": k, "ci_lo": round(lo, 6), "ci_hi": round(hi, 6),
+                        "excludes_zero": bool(lo > 0 or hi < 0), "claim": claim,
+                    })
+
+        if ci_rows:
+            out_path = RESULTS_DIR / "paired_bootstrap_ci.csv"
+            pd.DataFrame(ci_rows).to_csv(out_path, index=False)
+            logger.info(f"\nPaired bootstrap CIs saved -> {out_path}")
 
 
 

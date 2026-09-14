@@ -2,121 +2,226 @@
 behavioural_features.py — Q1: Click-History & Session Features
 
 Engineers behavioural features from click-logs for both datasets:
-1. Click-history features: click count, recency-weighted history
-2. Article features: popularity, freshness, category match
-3. Enforces behaviour-window boundary: only uses clicks where click_time < impression_time
+
+  Click-history   user_click_count, user_hist_recency_sum (exponential decay)
+  Session         session_clicks_1h, session_clicks_24h
+  Dwell time      hist_mean_read_time, hist_mean_scroll  (EB-NeRD only)
+  Article         article_popularity, freshness_days, category_match, cat_affinity
+
+Behaviour-window boundary (Q1.4)
+--------------------------------
+Every feature for an impression at time T is computed from clicks strictly
+before T. History is pre-sorted per user, so the boundary is a binary search
+(`np.searchsorted`) rather than a filter over the whole table.
+
+Only the most recent `max_history` clicks before T are used. This cap is not
+cosmetic: MIND's test `behaviors.tsv` gives at most a truncated history string,
+so training on an uncapped history would fit a user representation that cannot
+be rebuilt at serving time.
+
+Position bias (Q1.2)
+--------------------
+Deliberately not a feature. Candidate lists in both MIND and EB-NeRD are
+shuffled, not display-ordered: once list length is held fixed, click-through
+rate is flat across positions. The decay visible when positions are pooled is a
+list-length artifact (long lists have a lower per-candidate rate by
+construction). See `scripts/analyse_position_bias.py`.
 """
+
+import logging
 
 import numpy as np
 import pandas as pd
-from datetime import datetime
 
-# Schema columns matching A1 definitions
-COL_USER_ID = "user_id"
-COL_ARTICLE_ID = "article_id"
-COL_IMPRESSION_TIME = "impression_time"
-COL_CLICK_TIME = "click_time"
-COL_CATEGORY = "category"
-COL_PUBLISHED_TIME = "published_time"
+from src.data.schema import (
+    COL_ARTICLE_ID,
+    COL_CATEGORY,
+    COL_CLICK_TIME,
+    COL_IMPRESSION_ID,
+    COL_IMPRESSION_TIME,
+    COL_PUBLISHED_TIME,
+    COL_READ_TIME,
+    COL_SCROLL_PCT,
+    COL_USER_ID,
+)
+
+logger = logging.getLogger(__name__)
+
+NS_PER_DAY = 86_400_000_000_000
+NS_PER_HOUR = 3_600_000_000_000
+
+
+def _to_ns(series) -> np.ndarray:
+    """Datetime series → int64 nanoseconds, timezone-stripped."""
+    s = pd.to_datetime(series, errors="coerce")
+    if hasattr(s.dtype, "tz") and s.dtype.tz is not None:
+        s = s.dt.tz_localize(None)
+    return s.to_numpy(dtype="datetime64[ns]").astype(np.int64)
+
 
 class BehaviouralFeatureExtractor:
-    def __init__(self, history_df: pd.DataFrame, articles_df: pd.DataFrame, article_popularity: pd.Series = None):
-        self.history = history_df
-        self.articles = articles_df
-        self.article_popularity = article_popularity
-        
-        # Precompute global article stats up to the max timestamp if needed,
-        # but to strictly avoid leakage, we should compute features per-impression.
-        self.article_metadata = self.articles.set_index(COL_ARTICLE_ID)
+    def __init__(
+        self,
+        history_df: pd.DataFrame,
+        articles_df: pd.DataFrame,
+        article_popularity=None,
+        max_history: int = 50,
+        half_life_days: float = 7.0,
+    ):
+        self.max_history = max_history
+        self.half_life_days = half_life_days
 
-    def extract_features(self, impressions_df: pd.DataFrame, half_life_days: float = 7.0) -> pd.DataFrame:
-        """
-        Extract features for a given set of impressions.
-        impressions_df must contain: impression_id, user_id, impression_time, article_id (candidate)
-        Returns a DataFrame with the same number of rows and added feature columns.
-        """
-        # Ensure time is datetime
-        impressions_df = impressions_df.copy()
-        impressions_df[COL_IMPRESSION_TIME] = pd.to_datetime(impressions_df[COL_IMPRESSION_TIME])
-        
-        # Features to collect
-        features = []
-        
-        # Group by impression to process candidates together
-        grouped = impressions_df.groupby("impression_id", sort=False)
-        
-        for imp_id, group in grouped:
-            uid = group[COL_USER_ID].iloc[0]
-            imp_time = group[COL_IMPRESSION_TIME].iloc[0]
-            candidate_ids = group[COL_ARTICLE_ID].values
-            
-            # 1. Enforce Behavioural-Window Boundary (Q1.4)
-            # Only use history strictly before the impression time
-            user_hist = self.history[(self.history[COL_USER_ID] == uid) & 
-                                     (self.history[COL_CLICK_TIME] < imp_time)]
-            
-            # Click count
-            click_count = len(user_hist)
-            
-            # Recency-weighted history (exponential decay)
-            # Weight = exp(-ln(2) * (imp_time - click_time).days / half_life)
-            hist_weights = []
-            user_hist_categories = set()
-            session_clicks_1h = 0
-            if click_count > 0:
-                time_diffs_sec = (imp_time - user_hist[COL_CLICK_TIME]).dt.total_seconds()
-                time_diffs_days = time_diffs_sec / (3600 * 24)
-                hist_weights = np.exp(-np.log(2) * time_diffs_days / half_life_days)
-                session_clicks_1h = np.sum(time_diffs_sec <= 3600)
-                
-                # Fetch categories for user history
-                clicked_articles = user_hist[COL_ARTICLE_ID].values
-                valid_clicked = [a for a in clicked_articles if a in self.article_metadata.index]
-                if valid_clicked:
-                    user_hist_categories = set(self.article_metadata.loc[valid_clicked, COL_CATEGORY].dropna().values)
+        aid = articles_df[COL_ARTICLE_ID].astype(str)
+        cats = (
+            articles_df[COL_CATEGORY].fillna("").astype(str)
+            if COL_CATEGORY in articles_df.columns
+            else pd.Series("", index=articles_df.index)
+        )
+        self.cat_map = dict(zip(aid, cats))
 
-            imp_features = []
-            for cand_id in candidate_ids:
-                f_dict = {
-                    "impression_id": imp_id,
-                    "article_id": cand_id,
-                    "user_click_count": click_count,
-                    "user_hist_recency_sum": np.sum(hist_weights) if click_count > 0 else 0.0,
-                    "session_clicks_1h": int(session_clicks_1h),
-                }
-                
-                # Popularity
-                if self.article_popularity is not None:
-                    f_dict["article_popularity"] = self.article_popularity.get(cand_id, 0)
-                else:
-                    f_dict["article_popularity"] = 0
-                
-                # Article features
-                if cand_id in self.article_metadata.index:
-                    cand_meta = self.article_metadata.loc[cand_id]
-                    cand_cat = cand_meta.get(COL_CATEGORY, "")
-                    pub_time = cand_meta.get(COL_PUBLISHED_TIME, pd.NaT)
-                    
-                    f_dict["category_match"] = 1 if cand_cat in user_hist_categories else 0
-                    
-                    if pd.notna(pub_time):
-                        pub_time = pd.to_datetime(pub_time)
-                        if pub_time.tzinfo is not None:
-                            pub_time = pub_time.tz_localize(None)
-                        freshness_days = (imp_time - pub_time).total_seconds() / (3600 * 24)
-                        f_dict["freshness_days"] = max(0, freshness_days)
-                    else:
-                        f_dict["freshness_days"] = -1 # missing
-                else:
-                    f_dict["category_match"] = 0
-                    f_dict["freshness_days"] = -1
-                
-                imp_features.append(f_dict)
-                
-            features.extend(imp_features)
-            
-        features_df = pd.DataFrame(features)
-        
-        # Merge back to original df to preserve order and all columns
-        merged = pd.merge(impressions_df, features_df, on=["impression_id", "article_id"], how="left")
-        return merged
+        if COL_PUBLISHED_TIME in articles_df.columns:
+            pub_ns = _to_ns(articles_df[COL_PUBLISHED_TIME])
+            self.pub_map = {a: (np.nan if p == np.iinfo(np.int64).min else float(p))
+                            for a, p in zip(aid, pub_ns)}
+        else:
+            self.pub_map = {}
+
+        if article_popularity is None:
+            self.pop_map = {}
+        elif isinstance(article_popularity, pd.Series):
+            self.pop_map = {str(k): float(v) for k, v in article_popularity.items()}
+        else:
+            self.pop_map = {str(k): float(v) for k, v in dict(article_popularity).items()}
+
+        self.has_dwell = COL_READ_TIME in history_df.columns
+        self._build_history_index(history_df)
+
+    # ------------------------------------------------------------------
+
+    def _build_history_index(self, history_df: pd.DataFrame) -> None:
+        """Pre-sort history per user into numpy arrays for O(log n) windowing."""
+        h = history_df[[COL_USER_ID, COL_ARTICLE_ID, COL_CLICK_TIME]
+                       + ([COL_READ_TIME, COL_SCROLL_PCT] if self.has_dwell else [])].copy()
+        h[COL_CLICK_TIME] = pd.to_datetime(h[COL_CLICK_TIME], errors="coerce")
+        if hasattr(h[COL_CLICK_TIME].dtype, "tz") and h[COL_CLICK_TIME].dtype.tz is not None:
+            h[COL_CLICK_TIME] = h[COL_CLICK_TIME].dt.tz_localize(None)
+
+        # A click with no timestamp cannot be placed relative to the impression,
+        # so it cannot be shown to be in-window and is dropped.
+        h = h.dropna(subset=[COL_CLICK_TIME])
+        h = h.sort_values([COL_USER_ID, COL_CLICK_TIME], kind="mergesort")
+
+        if len(h) == 0:
+            self._hist = {}
+            return
+
+        uids = h[COL_USER_ID].astype(str).to_numpy()
+        times = _to_ns(h[COL_CLICK_TIME])
+        arts = h[COL_ARTICLE_ID].astype(str).to_numpy()
+        cats = np.array([self.cat_map.get(a, "") for a in arts], dtype=object)
+        reads = h[COL_READ_TIME].to_numpy(dtype=float) if self.has_dwell else None
+        scrolls = h[COL_SCROLL_PCT].to_numpy(dtype=float) if self.has_dwell else None
+
+        starts = np.flatnonzero(np.r_[True, uids[1:] != uids[:-1]])
+        ends = np.r_[starts[1:], len(uids)]
+
+        self._hist = {
+            uids[s]: (
+                times[s:e], arts[s:e], cats[s:e],
+                reads[s:e] if reads is not None else None,
+                scrolls[s:e] if scrolls is not None else None,
+            )
+            for s, e in zip(starts, ends)
+        }
+        logger.info(f"History index: {len(self._hist):,} users, {len(h):,} clicks")
+
+    # ------------------------------------------------------------------
+
+    def extract_features(self, impressions_df: pd.DataFrame, half_life_days: float = None) -> pd.DataFrame:
+        """
+        Return `impressions_df` with feature columns appended, same rows, same order.
+        """
+        half_life = half_life_days or self.half_life_days
+        out = impressions_df.copy()
+        n = len(out)
+
+        imp_ns = _to_ns(out[COL_IMPRESSION_TIME])
+        users = out[COL_USER_ID].astype(str).to_numpy()
+        cands = out[COL_ARTICLE_ID].astype(str).to_numpy()
+
+        click_count   = np.zeros(n, dtype=np.int32)
+        recency_sum   = np.zeros(n, dtype=np.float32)
+        sess_1h       = np.zeros(n, dtype=np.int32)
+        sess_24h      = np.zeros(n, dtype=np.int32)
+        cat_match     = np.zeros(n, dtype=np.int8)
+        cat_affinity  = np.zeros(n, dtype=np.float32)
+        freshness     = np.full(n, -1.0, dtype=np.float32)
+        popularity    = np.zeros(n, dtype=np.float32)
+        mean_read     = np.full(n, np.nan, dtype=np.float32)
+        mean_scroll   = np.full(n, np.nan, dtype=np.float32)
+
+        groups = out.groupby(COL_IMPRESSION_ID, sort=False).indices
+
+        for idx in groups.values():
+            first = idx[0]
+            uid = users[first]
+            t = imp_ns[first]
+
+            entry = self._hist.get(uid)
+            cat_counts = {}
+            n_cat = 0
+
+            if entry is not None:
+                times, _arts, cats, reads, scrolls = entry
+
+                # Behaviour-window boundary: strictly before the impression.
+                k = int(np.searchsorted(times, t, side="left"))
+                lo = max(0, k - self.max_history)
+
+                if k > lo:
+                    w_times = times[lo:k]
+                    age_days = (t - w_times) / NS_PER_DAY
+
+                    click_count[idx] = k - lo
+                    recency_sum[idx] = np.exp(-np.log(2) * age_days / half_life).sum()
+                    sess_1h[idx]  = int(((t - w_times) <= NS_PER_HOUR).sum())
+                    sess_24h[idx] = int(((t - w_times) <= 24 * NS_PER_HOUR).sum())
+
+                    w_cats = cats[lo:k]
+                    uniq, cnt = np.unique(w_cats.astype(str), return_counts=True)
+                    cat_counts = dict(zip(uniq.tolist(), cnt.tolist()))
+                    cat_counts.pop("", None)
+                    n_cat = sum(cat_counts.values())
+
+                    if reads is not None:
+                        w_read = reads[lo:k]
+                        w_scroll = scrolls[lo:k]
+                        if np.isfinite(w_read).any():
+                            mean_read[idx] = np.nanmean(w_read)
+                        if np.isfinite(w_scroll).any():
+                            mean_scroll[idx] = np.nanmean(w_scroll)
+
+            for i in idx:
+                cid = cands[i]
+                ccat = self.cat_map.get(cid, "")
+                cat_match[i] = 1 if ccat and ccat in cat_counts else 0
+                cat_affinity[i] = (cat_counts.get(ccat, 0) / n_cat) if n_cat else 0.0
+                popularity[i] = self.pop_map.get(cid, 0.0)
+
+                pub = self.pub_map.get(cid, np.nan)
+                if pub == pub:  # not NaN
+                    freshness[i] = max(0.0, (t - pub) / NS_PER_DAY)
+
+        out["user_click_count"]      = click_count
+        out["user_hist_recency_sum"] = recency_sum
+        out["session_clicks_1h"]     = sess_1h
+        out["session_clicks_24h"]    = sess_24h
+        out["category_match"]        = cat_match
+        out["cat_affinity"]          = cat_affinity
+        out["freshness_days"]        = freshness
+        out["article_popularity"]    = popularity
+        if self.has_dwell:
+            out["hist_mean_read_time"] = mean_read
+            out["hist_mean_scroll"]    = mean_scroll
+
+        return out
