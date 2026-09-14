@@ -66,3 +66,37 @@ def split_cold_warm(
     )
 
     return cold_preds, warm_preds
+
+def split_head_tail(
+    predictions: pd.DataFrame,
+    train_impressions: pd.DataFrame,
+    top_p: float = 0.2,
+    article_col: str = "article_id",
+    label_col: str = "label",
+) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    """
+    Split prediction rows into head and tail subsets based on article popularity.
+    """
+    # Calculate popularity
+    pop = train_impressions[train_impressions[label_col] == 1].groupby(article_col).size()
+    
+    # Identify head articles (top 20%)
+    if len(pop) == 0:
+        return pd.DataFrame(columns=predictions.columns), predictions.copy()
+        
+    threshold = pop.quantile(1.0 - top_p)
+    head_articles = set(pop[pop >= threshold].index)
+    
+    head_preds = predictions[predictions[article_col].isin(head_articles)].copy()
+    tail_preds = predictions[~predictions[article_col].isin(head_articles)].copy()
+    
+    logger.info(
+        f"Slicing: head articles (top {top_p*100}%) = {len(head_articles):,} | "
+        f"tail articles = {len(predictions[article_col].unique()) - len(head_articles):,}"
+    )
+    logger.info(
+        f"  Head predictions: {len(head_preds):,} rows | "
+        f"Tail predictions: {len(tail_preds):,} rows"
+    )
+    
+    return head_preds, tail_preds

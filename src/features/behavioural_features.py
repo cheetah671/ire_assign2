@@ -20,9 +20,10 @@ COL_CATEGORY = "category"
 COL_PUBLISHED_TIME = "published_time"
 
 class BehaviouralFeatureExtractor:
-    def __init__(self, history_df: pd.DataFrame, articles_df: pd.DataFrame):
+    def __init__(self, history_df: pd.DataFrame, articles_df: pd.DataFrame, article_popularity: pd.Series = None):
         self.history = history_df
         self.articles = articles_df
+        self.article_popularity = article_popularity
         
         # Precompute global article stats up to the max timestamp if needed,
         # but to strictly avoid leakage, we should compute features per-impression.
@@ -61,9 +62,12 @@ class BehaviouralFeatureExtractor:
             # Weight = exp(-ln(2) * (imp_time - click_time).days / half_life)
             hist_weights = []
             user_hist_categories = set()
+            session_clicks_1h = 0
             if click_count > 0:
-                time_diffs = (imp_time - user_hist[COL_CLICK_TIME]).dt.total_seconds() / (3600 * 24)
-                hist_weights = np.exp(-np.log(2) * time_diffs / half_life_days)
+                time_diffs_sec = (imp_time - user_hist[COL_CLICK_TIME]).dt.total_seconds()
+                time_diffs_days = time_diffs_sec / (3600 * 24)
+                hist_weights = np.exp(-np.log(2) * time_diffs_days / half_life_days)
+                session_clicks_1h = np.sum(time_diffs_sec <= 3600)
                 
                 # Fetch categories for user history
                 clicked_articles = user_hist[COL_ARTICLE_ID].values
@@ -78,7 +82,14 @@ class BehaviouralFeatureExtractor:
                     "article_id": cand_id,
                     "user_click_count": click_count,
                     "user_hist_recency_sum": np.sum(hist_weights) if click_count > 0 else 0.0,
+                    "session_clicks_1h": int(session_clicks_1h),
                 }
+                
+                # Popularity
+                if self.article_popularity is not None:
+                    f_dict["article_popularity"] = self.article_popularity.get(cand_id, 0)
+                else:
+                    f_dict["article_popularity"] = 0
                 
                 # Article features
                 if cand_id in self.article_metadata.index:

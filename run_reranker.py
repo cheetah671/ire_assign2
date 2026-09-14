@@ -90,7 +90,11 @@ def main():
         val_df["impression_id"].drop_duplicates().sample(500, random_state=42)
     )].copy()
 
-    extractor = BehaviouralFeatureExtractor(history, articles)
+    # Compute article popularity from training impressions (clicked only)
+    logger.info("Computing article popularity from train set...")
+    article_popularity = train_df[train_df["label"] == 1].groupby("article_id").size()
+    
+    extractor = BehaviouralFeatureExtractor(history, articles, article_popularity=article_popularity)
     
     logger.info("Extracting features for training set...")
     t0 = perf_counter()
@@ -113,8 +117,8 @@ def main():
     
     val_features_df["baseline_score"] = baseline_model.predict(val_features_df)
     
-    # Q3: Improved (with article freshness and category match)
-    improved_features = baseline_features + ["category_match", "freshness_days"]
+    # Q3: Improved (with article freshness and category match, plus popularity and session features)
+    improved_features = baseline_features + ["category_match", "freshness_days", "article_popularity", "session_clicks_1h"]
     logger.info("Training IMPROVED model (Ablation)...")
     improved_model = LightGBMReranker(feature_cols=improved_features)
     improved_model.train(train_features_df, val_features_df)

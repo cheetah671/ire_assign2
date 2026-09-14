@@ -41,8 +41,8 @@ from src.evaluation.metrics import (
     compute_ranking_metrics,
     compute_beyond_accuracy_metrics,
 )
-from src.evaluation.slicing import split_cold_warm
-from src.evaluation.bootstrap import bootstrap_ci
+from src.evaluation.slicing import split_cold_warm, split_head_tail
+from src.evaluation.bootstrap import bootstrap_ci, paired_bootstrap_ci
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -173,11 +173,21 @@ def evaluate_dataset(
 
     rows = [_results_row(dataset_name, ranker, "all", all_metrics, all_ci)]
 
-    # ── Cold / Warm slicing ────────────────────────────────────────────
+    # ── Cold / Warm and Head / Tail slicing ────────────────────────────
     logger.info("Slicing into cold-start vs warm users …")
     cold_preds, warm_preds = split_cold_warm(preds, history_all)
+    
+    logger.info("Slicing into head vs tail articles …")
+    head_preds, tail_preds = split_head_tail(preds, train_impressions)
+    
+    slices = [
+        ("cold", cold_preds), 
+        ("warm", warm_preds),
+        ("head", head_preds),
+        ("tail", tail_preds)
+    ]
 
-    for slice_name, slice_df in [("cold", cold_preds), ("warm", warm_preds)]:
+    for slice_name, slice_df in slices:
         if len(slice_df) == 0:
             logger.warning(f"No predictions for {slice_name} slice — skipping.")
             continue
@@ -285,10 +295,44 @@ def main() -> None:
         display_cols = [c for c in core_cols if c in results_df.columns]
         logger.info("\n" + results_df[display_cols].to_string(index=False))
 
-        # ── Save full results (including CI bounds) ────────────────────────────
         out_path = RESULTS_DIR / f"evaluation_{ranker}.csv"
         results_df.to_csv(out_path, index=False)
         logger.info(f"\nFull results saved → {out_path}")
+
+    # ── Paired Bootstrap (Improved vs Baseline) ─────────────────────────
+    if "baseline" in rankers and "improved" in rankers and not args.no_bootstrap:
+        for name in targets:
+            base_path = PRED_DIR / name / "baseline_val_predictions.parquet"
+            imp_path = PRED_DIR / name / "improved_val_predictions.parquet"
+            if base_path.exists() and imp_path.exists():
+                logger.info("\n" + "=" * 80)
+                logger.info(f"PAIRED BOOTSTRAP SIGNIFICANCE (Improved vs Baseline) [{name}]")
+                logger.info("=" * 80)
+                preds_baseline = pd.read_parquet(base_path)
+                preds_improved = pd.read_parquet(imp_path)
+                
+                # Standardize column names so a single metric_fn works
+                preds_baseline["score"] = preds_baseline["baseline_score"]
+                preds_baseline["rank"] = preds_baseline["baseline_rank"]
+                preds_improved["score"] = preds_improved["improved_score"]
+                preds_improved["rank"] = preds_improved["improved_rank"]
+                
+                def _generic_metrics(df):
+                    return compute_ranking_metrics(
+                        df, score_col="score", rank_col="rank", 
+                        impression_col=COL_IMPRESSION_ID, label_col=COL_LABEL
+                    )
+                
+                ci = paired_bootstrap_ci(
+                    preds_baseline, preds_improved, _generic_metrics,
+                    n_iterations=args.bootstrap_n, seed=42
+                )
+                
+                logger.info("\n  ── 95% Confidence Intervals for (Improved - Baseline) ──")
+                for k, (lo, hi) in ci.items():
+                    sig = "*** SIGNIFICANT ***" if (lo > 0 or hi < 0) else "Not significant"
+                    logger.info(f"    Delta {k:<8}: [{lo:+.4f} , {hi:+.4f}]  {sig}")
+
 
 
 if __name__ == "__main__":
