@@ -226,7 +226,7 @@ def main() -> None:
         help="Which dataset to evaluate.",
     )
     parser.add_argument(
-        "--ranker", choices=["bm25", "emb", "both"], default="bm25",
+        "--ranker", choices=["bm25", "emb", "baseline", "improved", "both", "all"], default="bm25",
         help="Which ranker's predictions to evaluate.",
     )
     parser.add_argument(
@@ -249,7 +249,10 @@ def main() -> None:
     ranker_map = {
         "bm25": ["bm25"],
         "emb":  ["emb"],
+        "baseline": ["baseline"],
+        "improved": ["improved"],
         "both": ["bm25", "emb"],
+        "all": ["bm25", "emb", "baseline", "improved"]
     }
     rankers = ranker_map[args.ranker]
 
