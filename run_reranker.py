@@ -62,6 +62,7 @@ SERVING_UNSAFE = {
         "freshness_days", "hist_mean_read_time", "hist_mean_scroll",
     ],
     "EBNERD_DEMO": [],
+    "EBNERD_SMALL": [],
 }
 
 
@@ -176,13 +177,13 @@ def _max_sim(index, hist_idx, uid, imp_time, candidate_ids, max_history=50):
 
 def main():
     parser = argparse.ArgumentParser(description="Q2 & Q3: Re-Ranker and Baseline")
-    parser.add_argument("--dataset", choices=["mind", "ebnerd"], default="ebnerd")
+    parser.add_argument("--dataset", choices=["mind", "ebnerd", "ebnerd_small"], default="ebnerd")
     parser.add_argument("--ranker", choices=["bm25", "emb"], default="bm25")
     parser.add_argument("--train-imps", type=int, default=20_000)
     parser.add_argument("--val-imps", type=int, default=5_000)
     args = parser.parse_args()
 
-    dataset_map = {"mind": "MIND", "ebnerd": "EBNERD_DEMO"}
+    dataset_map = {"mind": "MIND", "ebnerd": "EBNERD_DEMO", "ebnerd_small": "EBNERD_SMALL"}
     dataset_name = dataset_map[args.dataset]
     score_col = f"{args.ranker}_score"
 

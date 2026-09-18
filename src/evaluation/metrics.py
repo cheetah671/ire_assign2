@@ -152,9 +152,11 @@ def compute_ranking_metrics(
 
     # Sum of ascending score-ranks for positives (higher score = lower _rank = better)
     # Ascending score rank = n_total + 1 - _rank
-    df["_asc_rank"] = df.groupby(impression_col)["_rank"].transform(
-        lambda x: x.max() + 1 - x
-    )
+    # transform("max") stays in pandas' Cython path. A lambda here would be
+    # called once per impression group, which is ~5k Python calls per bootstrap
+    # iteration and dominated the whole evaluation.
+    _grp_max = df.groupby(impression_col)["_rank"].transform("max")
+    df["_asc_rank"] = _grp_max + 1 - df["_rank"]
     pos_rank_sum = (
         df[df[label_col] == 1]
         .groupby(impression_col)["_asc_rank"]

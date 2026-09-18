@@ -1,0 +1,3 @@
+dataset,ranker,emb_index_mb,history_mb,articles_mb,model_mb,total_mb,kb_per_article,mean_candidates,p50_ms,p95_ms,p99_ms,stage1_p99_ms,features_p99_ms,gbdt_p99_ms,qps_per_core,cost_per_1k_usd,meets_sla
+MIND,emb,95.56,91.55,21.54,0.161,216.64,1.838,35.3,10.688,12.837,13.987,2.231,10.112,2.424,71.49,0.000132,True
+EBNERD_SMALL,emb,23.73,179.03,52.03,0.195,257.5,3.741,11.7,12.295,14.07,15.174,1.98,11.164,2.777,65.9,0.000143,True

@@ -1,0 +1,66 @@
+16:18:55  INFO      ================================================================
+16:18:55  INFO      Serving analysis  |  MIND  |  stage-1 = emb
+16:18:55  INFO      ================================================================
+16:18:56  INFO      [1] Index memory
+16:18:56  INFO      Loading embedding cache from C:\Users\ARNAV\Downloads\IRE_A2\ire_assign2\data\cache\emb_MIND.npz …
+16:18:56  INFO        Loaded 65,238 embeddings (dim=384)
+16:18:56  INFO          embedding matrix      65,238 x 384       95.6 MB
+16:18:56  INFO          id -> row map         65,238 entries       7.8 MB
+16:18:56  INFO          click history      2,012,565 rows           91.6 MB
+16:18:56  INFO          article store         65,238 rows           21.5 MB
+16:18:56  INFO          GBDT model                47 trees           0.2 MB
+16:18:56  INFO          TOTAL                                 216.6 MB
+16:18:56  INFO          -> 1.84 KB per article (embedding + metadata)
+16:18:56  INFO      [2] Latency over 300 single-user requests
+16:20:02  INFO      History index: 91,935 users, 2,012,565 clicks
+16:20:05  INFO          mean candidates/request  35.3
+16:20:05  INFO          phase                       p50      p95      p99   (ms)
+16:20:05  INFO          stage-1 retrieval          1.44     1.88     2.23
+16:20:05  INFO          feature extraction         7.47     9.01    10.11
+16:20:05  INFO          GBDT scoring               1.80     2.15     2.42
+16:20:05  INFO          END-TO-END                10.69    12.84    13.99
+16:20:05  INFO      [3] Cost / QPS at a p99 < 100 ms SLA
+16:20:05  INFO          sustained QPS per core            71.5
+16:20:05  INFO          sustained QPS per 2-vCPU node    143.0
+16:20:05  INFO          cost per 1,000 queries        $ 0.00013
+16:20:05  INFO          cost per 1M queries           $    0.13
+16:20:05  INFO          single-node p99 14.0 ms -> MEETS the 100 ms SLA
+16:20:05  INFO      [4] What breaks first at 10x
+16:20:05  INFO          time split: stage-1 13%  features 70%  GBDT 17%
+16:20:05  INFO          10x catalogue -> embedding matrix 956 MB, still RAM-resident; brute-force cosine is O(candidates) per request, not O(catalogue), so latency is unchanged
+16:20:05  INFO          10x users     -> history store 916 MB. This is the first thing to break: it is held as an in-process pandas frame, so it must move to a key-value store
+16:20:05  INFO          10x QPS       -> 1430 QPS on 10 nodes at $0.68/hr, but each node carries its own 217 MB of index, so memory cost grows with throughput and not just with data
+16:20:06  INFO      ================================================================
+16:20:06  INFO      Serving analysis  |  EBNERD_SMALL  |  stage-1 = emb
+16:20:06  INFO      ================================================================
+16:20:08  INFO      [1] Index memory
+16:20:08  INFO      Loading embedding cache from C:\Users\ARNAV\Downloads\IRE_A2\ire_assign2\data\cache\emb_EBNERD_SMALL.npz …
+16:20:08  INFO        Loaded 20,738 embeddings (dim=300)
+16:20:08  INFO          embedding matrix      20,738 x 300       23.7 MB
+16:20:08  INFO          id -> row map         20,738 entries       2.5 MB
+16:20:08  INFO          click history      2,777,347 rows          179.0 MB
+16:20:08  INFO          article store         20,738 rows           52.0 MB
+16:20:08  INFO          GBDT model                57 trees           0.2 MB
+16:20:08  INFO          TOTAL                                 257.5 MB
+16:20:08  INFO          -> 3.74 KB per article (embedding + metadata)
+16:20:08  INFO      [2] Latency over 300 single-user requests
+16:20:33  INFO      History index: 18,827 users, 2,777,347 clicks
+16:20:37  INFO          mean candidates/request  11.7
+16:20:37  INFO          phase                       p50      p95      p99   (ms)
+16:20:37  INFO          stage-1 retrieval          1.50     1.79     1.98
+16:20:37  INFO          feature extraction         8.81    10.20    11.16
+16:20:37  INFO          GBDT scoring               2.01     2.44     2.78
+16:20:37  INFO          END-TO-END                12.30    14.07    15.17
+16:20:37  INFO      [3] Cost / QPS at a p99 < 100 ms SLA
+16:20:37  INFO          sustained QPS per core            65.9
+16:20:37  INFO          sustained QPS per 2-vCPU node    131.8
+16:20:37  INFO          cost per 1,000 queries        $ 0.00014
+16:20:37  INFO          cost per 1M queries           $    0.14
+16:20:37  INFO          single-node p99 15.2 ms -> MEETS the 100 ms SLA
+16:20:37  INFO      [4] What breaks first at 10x
+16:20:37  INFO          time split: stage-1 12%  features 72%  GBDT 16%
+16:20:37  INFO          10x catalogue -> embedding matrix 237 MB, still RAM-resident; brute-force cosine is O(candidates) per request, not O(catalogue), so latency is unchanged
+16:20:37  INFO          10x users     -> history store 1790 MB. This is the first thing to break: it is held as an in-process pandas frame, so it must move to a key-value store
+16:20:37  INFO          10x QPS       -> 1318 QPS on 10 nodes at $0.68/hr, but each node carries its own 257 MB of index, so memory cost grows with throughput and not just with data
+16:20:37  INFO      
+Saved -> C:\Users\ARNAV\Downloads\IRE_A2\ire_assign2\results\serving_analysis.csv

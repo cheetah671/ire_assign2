@@ -127,7 +127,7 @@ class TrainSet(Dataset):
 
 def main():
     parser = argparse.ArgumentParser(description="Q3.1: reproduced NRMS baseline")
-    parser.add_argument("--dataset", choices=["mind", "ebnerd"], default="mind")
+    parser.add_argument("--dataset", choices=["mind", "ebnerd", "ebnerd_small"], default="mind")
     parser.add_argument("--epochs", type=int, default=2)
     parser.add_argument("--train-imps", type=int, default=20_000)
     parser.add_argument("--batch-size", type=int, default=64)
@@ -144,7 +144,8 @@ def main():
         torch.set_num_threads(args.threads)
     torch.manual_seed(42)
 
-    dataset_name = {"mind": "MIND", "ebnerd": "EBNERD_DEMO"}[args.dataset]
+    dataset_name = {"mind": "MIND", "ebnerd": "EBNERD_DEMO",
+                    "ebnerd_small": "EBNERD_SMALL"}[args.dataset]
     proc = PROCESSED_DIR / dataset_name
 
     logger.info("Loading processed tables ...")

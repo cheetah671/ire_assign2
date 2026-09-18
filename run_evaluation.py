@@ -145,6 +145,15 @@ def evaluate_dataset(
             label_col=COL_LABEL,
         )
 
+    def _slim(df):
+        """
+        Bootstrap copies its input once per iteration. The prediction frames
+        carry ~25 columns of features the metrics never read, so hand the
+        resampler only the five columns it needs.
+        """
+        cols = [COL_IMPRESSION_ID, COL_USER_ID, COL_LABEL, score_col, rank_col]
+        return df[[c for c in cols if c in df.columns]]
+
     # ── Beyond-accuracy metrics ────────────────────────────────────────
     logger.info("Computing beyond-accuracy metrics …")
     beyond = compute_beyond_accuracy_metrics(
@@ -168,7 +177,7 @@ def evaluate_dataset(
     all_ci = None
     if run_bootstrap:
         logger.info(f"Bootstrap CI (N={bootstrap_n}) for all users …")
-        all_ci = bootstrap_ci(preds, _ranking_metrics,
+        all_ci = bootstrap_ci(_slim(preds), _ranking_metrics,
                               n_iterations=bootstrap_n, seed=42)
 
     rows = [_results_row(dataset_name, ranker, "all", all_metrics, all_ci)]
@@ -212,7 +221,7 @@ def evaluate_dataset(
         slice_ci = None
         if run_bootstrap:
             logger.info(f"Bootstrap CI ({slice_name} users, N={bootstrap_n}) …")
-            slice_ci = bootstrap_ci(slice_df, _ranking_metrics,
+            slice_ci = bootstrap_ci(_slim(slice_df), _ranking_metrics,
                                     n_iterations=bootstrap_n, seed=42)
 
         _print_metrics(f"{slice_name.capitalize()} users", slice_metrics, slice_ci)
@@ -232,12 +241,12 @@ def main() -> None:
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument(
-        "--dataset", choices=["mind", "ebnerd", "both"], default="both",
+        "--dataset", choices=["mind", "ebnerd", "ebnerd_small", "both"], default="both",
         help="Which dataset to evaluate.",
     )
     parser.add_argument(
         "--ranker",
-        choices=["bm25", "emb", "stage1", "baseline", "improved", "serving", "both", "all"],
+        choices=["bm25", "emb", "stage1", "nrms", "baseline", "improved", "serving", "both", "all"],
         default="bm25",
         help="Which ranker's predictions to evaluate.",
     )
@@ -254,7 +263,8 @@ def main() -> None:
     dataset_map = {
         "mind":   ["MIND"],
         "ebnerd": ["EBNERD_DEMO"],
-        "both":   ["MIND", "EBNERD_DEMO"],
+        "ebnerd_small": ["EBNERD_SMALL"],
+        "both":   ["MIND", "EBNERD_SMALL"],
     }
     targets = dataset_map[args.dataset]
 
@@ -262,11 +272,12 @@ def main() -> None:
         "bm25": ["bm25"],
         "emb":  ["emb"],
         "stage1": ["stage1"],
+        "nrms": ["nrms"],
         "baseline": ["baseline"],
         "improved": ["improved"],
         "serving": ["serving"],
         "both": ["bm25", "emb"],
-        "all": ["stage1", "baseline", "improved", "serving"],
+        "all": ["stage1", "nrms", "baseline", "improved", "serving"],
     }
     rankers = ranker_map[args.ranker]
 
@@ -312,6 +323,8 @@ def main() -> None:
          "adding the stage-1 semantic score beats behavioural features alone"),
         ("stage1", "improved",
          "the two-stage reranker beats stage-1 retrieval on its own"),
+        ("nrms", "improved",
+         "Q3: the two-stage reranker beats the reproduced NRMS baseline"),
         ("improved", "serving",
          "Q9: dropping features unavailable at serving time costs nothing"),
     ]
