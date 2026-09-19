@@ -1,0 +1,6 @@
+# LightGBM model files use byte-offset-based framing (tree_sizes=...) to jump
+# between trees. Git's line-ending conversion (autocrlf) inserts a \r before
+# every \n on checkout, which shifts every offset after the first line and
+# makes the file unloadable ("Model format error, expect a tree here").
+# Force these to be treated as binary so no platform ever rewrites them.
+models/*.txt -text
